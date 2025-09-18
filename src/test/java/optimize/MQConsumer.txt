@@ -1,0 +1,407 @@
+**/
+package com.example.demo.MQ.thumb.Consumer;
+
+import cn.hutool.core.lang.Pair;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.example.demo.MQ.thumb.msg.ThumbEvent;
+import com.example.demo.mapper.BlogMapper;
+import com.example.demo.model.entity.thumb;
+import com.example.demo.service.ThumbService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.pulsar.client.api.Message;
+import org.apache.pulsar.client.api.MessageId;
+import org.apache.pulsar.client.api.SubscriptionType;
+import org.apache.pulsar.common.schema.SchemaType;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.pulsar.annotation.PulsarListener;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StopWatch;
+
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
+
+/**
+ * 点赞事件消费者
+ * 负责批量处理点赞事件，实现幂等性处理
+ *
+ * @author pine
+ */
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class ThumbConsumer {
+
+    private final BlogMapper blogMapper;
+    private final ThumbService thumbService;
+
+    // 配置参数
+    @Value("${thumb.batch.size:500}")
+    private int batchSize;
+
+    @Value("${thumb.processing.timeout:30000}")
+    private long processingTimeout;
+
+    // 监控指标
+    private final AtomicLong totalProcessedMessages = new AtomicLong(0);
+    private final AtomicLong totalProcessedBatches = new AtomicLong(0);
+    private final AtomicLong totalErrors = new AtomicLong(0);
+    private final AtomicLong totalThumbsInserted = new AtomicLong(0);
+    private final AtomicLong totalThumbsRemoved = new AtomicLong(0);
+    private final AtomicLong totalBlogsUpdated = new AtomicLong(0);
+
+    /**
+     * 死信队列消费者
+     */
+    @PulsarListener(topics = "thumb-dlq-topic")
+    public void consumerMsg(Message<ThumbEvent> message) {
+        MessageId messageId = message.getMessageId();
+        log.warn("Dead letter message received - messageId: {}, topic: {}, reason: {}",
+                messageId, message.getTopicName(), message.getProperty("REJECTED_REASON"));
+
+        // 记录死信消息统计
+        totalErrors.incrementAndGet();
+    }
+
+    /**
+     * 批量处理点赞事件
+     * 实现幂等性：同一用户对同一博客的多次操作，按时间排序后取最终状态
+     */
+    @PulsarListener(
+            subscriptionName = "thumb-subscription",
+            topics = "thumb-topic",
+            subscriptionType = SubscriptionType.Shared,
+            schemaType = SchemaType.JSON,
+            batch = true,
+            negativeAckRedeliveryBackoff = "negativeAckRedeliveryBackoff",
+            ackTimeoutRedeliveryBackoff = "ackTimeoutRedeliveryBackoff",
+            deadLetterPolicy = "deadLetterPolicy"
+    )
+    @Transactional(rollbackFor = Exception.class)
+    public void processBatch(List<Message<ThumbEvent>> messages) {
+        StopWatch stopWatch = new StopWatch("ThumbBatchProcessing");
+        stopWatch.start("total");
+
+        String batchId = UUID.randomUUID().toString().substring(0, 8);
+        int originalMessageCount = messages.size();
+
+        try {
+            log.info("Starting batch processing - batchId: {}, messageCount: {}", batchId, originalMessageCount);
+
+            // 1. 提取和验证事件
+            stopWatch.start("extract-events");
+            List<ThumbEvent> thumbEvents = extractAndValidateEvents(messages);
+            stopWatch.stop();
+
+            if (thumbEvents.isEmpty()) {
+                log.warn("No valid events found in batch - batchId: {}", batchId);
+                return;
+            }
+
+            // 2. 处理重复事件，实现幂等性
+            stopWatch.start("deduplicate-events");
+            Map<Pair<Long, Long>, ThumbEvent> thumbEventMap = processDuplicateEvents(thumbEvents);
+            stopWatch.stop();
+
+            // 3. 收集处理数据
+            stopWatch.start("collect-data");
+            ProcessingData processingData = collectProcessingData(thumbEventMap);
+            stopWatch.stop();
+
+            // 4. 执行数据库操作
+            stopWatch.start("database-operations");
+            executeDatabaseOperations(processingData);
+            stopWatch.stop();
+
+            // 5. 更新监控指标
+            updateMetrics(processingData);
+
+            stopWatch.stop(); // total
+
+            // 记录成功日志
+            log.info("Batch processing completed successfully - batchId: {}, " +
+                    "originalMessages: {}, validEvents: {}, finalEvents: {}, " +
+                    "thumbsToInsert: {}, thumbsToRemove: {}, blogsToUpdate: {}, " +
+                    "processingTime: {}ms",
+                    batchId, originalMessageCount, thumbEvents.size(),
+                    thumbEventMap.size(), processingData.thumbsToInsert.size(),
+                    processingData.thumbsToRemove.size(), processingData.blogThumbCountMap.size(),
+                    stopWatch.getTotalTimeMillis());
+
+            // 记录详细性能日志
+            log.debug("Performance breakdown - batchId: {}, {}", batchId, stopWatch.prettyPrint());
+
+        } catch (Exception e) {
+            totalErrors.incrementAndGet();
+            log.error("Batch processing failed - batchId: {}, messageCount: {}, error: {}",
+                    batchId, originalMessageCount, e.getMessage(), e);
+            throw e; // 重新抛出异常，触发事务回滚
+        } finally {
+            totalProcessedBatches.incrementAndGet();
+            totalProcessedMessages.addAndGet(originalMessageCount);
+        }
+    }
+
+    /**
+     * 提取和验证事件
+     */
+    private List<ThumbEvent> extractAndValidateEvents(List<Message<ThumbEvent>> messages) {
+        List<ThumbEvent> validEvents = new ArrayList<>();
+        int invalidCount = 0;
+
+        for (Message<ThumbEvent> message : messages) {
+            try {
+                ThumbEvent event = message.getValue();
+                if (event != null && isValidEvent(event)) {
+                    validEvents.add(event);
+                } else {
+                    invalidCount++;
+                    log.warn("Invalid event found - messageId: {}, event: {}",
+                            message.getMessageId(), event);
+                }
+            } catch (Exception e) {
+                invalidCount++;
+                log.error("Failed to extract event - messageId: {}, error: {}",
+                        message.getMessageId(), e.getMessage());
+            }
+        }
+
+        if (invalidCount > 0) {
+            log.warn("Found {} invalid events out of {} total messages", invalidCount, messages.size());
+        }
+
+        return validEvents;
+    }
+
+    /**
+     * 验证事件有效性
+     */
+    private boolean isValidEvent(ThumbEvent event) {
+        return event.getBlogId() != null &&
+               event.getUserId() != null &&
+               event.getType() != null &&
+               event.getLocalDateTime() != null;
+    }
+
+    /**
+     * 处理重复事件，返回最终状态
+     * 同一用户对同一博客的多次操作，按时间排序后取最终状态
+     */
+    private Map<Pair<Long, Long>, ThumbEvent> processDuplicateEvents(List<ThumbEvent> thumbEvents) {
+        return thumbEvents.stream()
+                .collect(Collectors.groupingBy(
+                        event -> Pair.of(event.getBlogId(), event.getUserId()),
+                        Collectors.collectingAndThen(
+                                Collectors.toList(),
+                                events -> {
+                                    // 按时间排序
+                                    events.sort(Comparator.comparing(ThumbEvent::getLocalDateTime));
+
+                                    // 如果事件数量为偶数，最终状态为取消点赞（返回null）
+                                    // 如果为奇数，最终状态为点赞（返回最后一个事件）
+                                    return events.size() % 2 == 0 ? null : events.get(events.size() - 1);
+                                }
+                        )
+                ));
+    }
+
+    /**
+     * 收集处理数据
+     */
+    private ProcessingData collectProcessingData(Map<Pair<Long, Long>, ThumbEvent> thumbEventMap) {
+        Map<Long, Long> blogThumbCountMap = new HashMap<>();
+        List<thumb> thumbsToInsert = new ArrayList<>();
+        List<Pair<Long, Long>> thumbsToRemove = new ArrayList<>();
+
+        thumbEventMap.forEach((userBlogPair, event) -> {
+            if (event == null) {
+                return; // 跳过无效事件
+            }
+
+            Long blogId = event.getBlogId();
+            Long userId = event.getUserId();
+
+            if (event.getType() == ThumbEvent.ThumbType.INCREASE) {
+                // 增加点赞数
+                blogThumbCountMap.merge(blogId, 1L, Long::sum);
+
+                // 准备插入点赞记录
+                thumb thumbEntity = new thumb();
+                thumbEntity.setBlogId(blogId);
+                thumbEntity.setUserId(userId);
+                thumbEntity.setCreateTime(new cn.hutool.core.date.DateTime());
+                thumbsToInsert.add(thumbEntity);
+            } else {
+                // 减少点赞数
+                blogThumbCountMap.merge(blogId, -1L, Long::sum);
+                thumbsToRemove.add(userBlogPair);
+            }
+        });
+
+        return new ProcessingData(blogThumbCountMap, thumbsToInsert, thumbsToRemove);
+    }
+
+    /**
+     * 执行数据库操作
+     */
+    private void executeDatabaseOperations(ProcessingData data) {
+        // 1. 批量删除点赞记录
+        if (!data.thumbsToRemove.isEmpty()) {
+            removeThumbs(data.thumbsToRemove);
+        }
+
+        // 2. 批量更新博客点赞数
+        if (!data.blogThumbCountMap.isEmpty()) {
+            batchUpdateBlog(data.blogThumbCountMap);
+        }
+
+        // 3. 批量插入点赞记录
+        if (!data.thumbsToInsert.isEmpty()) {
+            batchInsertThumbs(data.thumbsToInsert);
+        }
+    }
+
+    /**
+     * 批量删除点赞记录
+     */
+    private void removeThumbs(List<Pair<Long, Long>> thumbsToRemove) {
+        StopWatch stopWatch = new StopWatch("RemoveThumbs");
+        stopWatch.start();
+
+        try {
+            LambdaQueryWrapper<thumb> queryWrapper = new LambdaQueryWrapper<>();
+            queryWrapper.and(wrapper -> {
+                for (Pair<Long, Long> pair : thumbsToRemove) {
+                    wrapper.or(w -> w.eq(thumb::getUserId, pair.getKey())
+                            .eq(thumb::getBlogId, pair.getValue()));
+                }
+            });
+
+            boolean success = thumbService.remove(queryWrapper);
+            stopWatch.stop();
+
+            if (success) {
+                log.info("Successfully removed {} thumb records in {}ms",
+                        thumbsToRemove.size(), stopWatch.getTotalTimeMillis());
+                totalThumbsRemoved.addAndGet(thumbsToRemove.size());
+            } else {
+                log.warn("Failed to remove thumb records - count: {}", thumbsToRemove.size());
+            }
+        } catch (Exception e) {
+            stopWatch.stop();
+            log.error("Exception occurred while removing thumbs - count: {}, error: {}",
+                    thumbsToRemove.size(), e.getMessage(), e);
+            throw new RuntimeException("Failed to remove thumbs", e);
+        }
+    }
+
+    /**
+     * 批量更新博客点赞数
+     */
+    public void batchUpdateBlog(Map<Long, Long> countMap) {
+        if (countMap == null || countMap.isEmpty()) {
+            log.debug("No blog thumb count to update");
+            return;
+        }
+
+        StopWatch stopWatch = new StopWatch("UpdateBlogThumbCount");
+        stopWatch.start();
+
+        try {
+            blogMapper.batchUpdateThumbCount(countMap);
+            stopWatch.stop();
+
+            log.info("Successfully updated thumb count for {} blogs in {}ms",
+                    countMap.size(), stopWatch.getTotalTimeMillis());
+            totalBlogsUpdated.addAndGet(countMap.size());
+        } catch (Exception e) {
+            stopWatch.stop();
+            log.error("Failed to batch update blog thumb count - blogCount: {}, error: {}",
+                    countMap.size(), e.getMessage(), e);
+            throw new RuntimeException("Failed to update blog thumb count", e);
+        }
+    }
+
+    /**
+     * 批量插入点赞记录
+     */
+    public void batchInsertThumbs(List<thumb> thumbs) {
+        if (thumbs == null || thumbs.isEmpty()) {
+            log.debug("No thumbs to insert");
+            return;
+        }
+
+        StopWatch stopWatch = new StopWatch("InsertThumbs");
+        stopWatch.start();
+
+        try {
+            thumbService.saveBatch(thumbs, batchSize);
+            stopWatch.stop();
+
+            log.info("Successfully inserted {} thumb records in {}ms",
+                    thumbs.size(), stopWatch.getTotalTimeMillis());
+            totalThumbsInserted.addAndGet(thumbs.size());
+        } catch (Exception e) {
+            stopWatch.stop();
+            log.error("Failed to batch insert thumbs - count: {}, error: {}",
+                    thumbs.size(), e.getMessage(), e);
+            throw new RuntimeException("Failed to insert thumbs", e);
+        }
+    }
+
+    /**
+     * 更新监控指标
+     */
+    private void updateMetrics(ProcessingData data) {
+        // 这里可以添加更多监控指标，比如发送到监控系统
+        log.debug("Metrics updated - thumbsInserted: {}, thumbsRemoved: {}, blogsUpdated: {}",
+                data.thumbsToInsert.size(), data.thumbsToRemove.size(), data.blogThumbCountMap.size());
+    }
+
+    /**
+     * 获取监控指标
+     */
+    public Map<String, Object> getMetrics() {
+        Map<String, Object> metrics = new HashMap<>();
+        metrics.put("totalProcessedMessages", totalProcessedMessages.get());
+        metrics.put("totalProcessedBatches", totalProcessedBatches.get());
+        metrics.put("totalErrors", totalErrors.get());
+        metrics.put("totalThumbsInserted", totalThumbsInserted.get());
+        metrics.put("totalThumbsRemoved", totalThumbsRemoved.get());
+        metrics.put("totalBlogsUpdated", totalBlogsUpdated.get());
+        metrics.put("currentTime", LocalDateTime.now());
+        return metrics;
+    }
+
+    /**
+     * 处理数据容器
+     */
+    private static class ProcessingData {
+        final Map<Long, Long> blogThumbCountMap;
+        final List<thumb> thumbsToInsert;
+        final List<Pair<Long, Long>> thumbsToRemove;
+
+        ProcessingData(Map<Long, Long> blogThumbCountMap, List<thumb> thumbsToInsert, List<Pair<Long, Long>> thumbsToRemove) {
+            this.blogThumbCountMap = blogThumbCountMap;
+            this.thumbsToInsert = thumbsToInsert;
+            this.thumbsToRemove = thumbsToRemove;
+        }
+    }
+}
+
+
+yml
+
+thumb:
+  batch:
+    size: 500  # 批处理大小
+  processing:
+    timeout: 30000  # 处理超时时间
+
+thumb:
+  metrics:
+    enabled: true  # 启用监控
+    log-interval: 60000  # 日志输出间隔

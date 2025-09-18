@@ -1,0 +1,56 @@
+spring:
+  application.name: demo2
+  mvc:
+    servlet:
+      path: /api
+  profiles:
+    active: local
+  # DataSource Config
+  datasource:
+#    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:4000/thumbSystem
+    username: leikooo
+    password: YourPass123
+  data:
+    redis:
+      # 单节点配置 (注释掉，使用集群配置)
+      # host: 127.0.0.1
+      # port: 17001
+
+      # Redis Cluster 配置
+      cluster:
+        nodes: 127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003,127.0.0.1:7004,127.0.0.1:7005,127.0.0.1:7006
+        max-redirects: 3
+
+      connect-timeout: 5000ms
+      timeout: 5000ms
+      lettuce:
+        pool:
+          max-active: 16  # 增加连接池大小以支持集群
+          max-idle: 8
+          min-idle: 2
+          max-wait: -1ms
+# mybatis-plus
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: false
+#    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+# knife4j 的增强配置，不需要增强可以不配
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
+server:
+  port: 9199
+# 整合 Prometheus + Grafana
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, prometheus
+  metrics:
+    distribution:
+      percentiles:
+        http:
+          server:
+            requests: 0.5, 0.75, 0.9, 0.95, 0.99
