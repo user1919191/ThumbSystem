@@ -13,7 +13,7 @@
 * 后端框架：Spring Boot 3 + Java 21
 * 数据访问：MyBatis-Plus
 * 分布式数据库：TiDB
-* 内存数据库: JDHotKey
+* 内存数据库: Caffeine
 * 缓存系统：Redis Cluster
 * 消息队列：Pulsar
 * 容器化：Docker
