@@ -2,6 +2,7 @@ package com.example.demo.exception;
 
 
 import com.example.demo.common.ErrorCode;
+import com.example.demo.exception.BusinessException;
 
 /**
  * 抛异常工具类

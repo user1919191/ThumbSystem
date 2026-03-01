@@ -1,5 +1,8 @@
 package com.example.demo.common;
 
+import com.example.demo.common.BaseResponse;
+import com.example.demo.common.ErrorCode;
+
 /**
  * 返回工具类
  */
@@ -22,7 +25,7 @@ public class ResultUtils {
      * @param errorCode
      * @return
      */
-    public static BaseResponse error(ErrorCode errorCode) {
+    public static BaseResponse error(com.example.demo.common.ErrorCode errorCode) {
         return new BaseResponse<>(errorCode);
     }
 

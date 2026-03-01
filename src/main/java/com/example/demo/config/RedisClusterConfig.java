@@ -5,11 +5,12 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisClusterConfiguration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
-import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.connection.jedis.JedisClientConfiguration;
+import org.springframework.data.redis.connection.jedis.JedisConnectionFactory;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
+import redis.clients.jedis.JedisPoolConfig;
 
 import java.time.Duration;
 import java.util.List;
@@ -43,20 +44,24 @@ public class RedisClusterConfig {
     }
 
     @Bean
-    public LettuceClientConfiguration lettuceClientConfiguration() {
-        return LettuceClientConfiguration.builder()
-                .commandTimeout(Duration.ofMillis(timeout))
-                .poolConfig(org.apache.commons.pool2.impl.GenericObjectPoolConfig.builder()
-                        .maxTotal(maxActive)
-                        .maxIdle(maxIdle)
-                        .minIdle(minIdle)
-                        .build())
+    public JedisClientConfiguration jedisClientConfiguration() {
+        JedisPoolConfig poolConfig = new JedisPoolConfig();
+        poolConfig.setMaxTotal(maxActive);
+        poolConfig.setMaxIdle(maxIdle);
+        poolConfig.setMinIdle(minIdle);
+        poolConfig.setMaxWait(Duration.ofMillis(-1));
+
+        return JedisClientConfiguration.builder()
+                .connectTimeout(Duration.ofMillis(timeout))
+                .readTimeout(Duration.ofMillis(timeout))
+                .usePooling()
+                .poolConfig(poolConfig)
                 .build();
     }
 
     @Bean
-    public LettuceConnectionFactory redisConnectionFactory() {
-        return new LettuceConnectionFactory(redisClusterConfiguration(), lettuceClientConfiguration());
+    public JedisConnectionFactory redisConnectionFactory() {
+        return new JedisConnectionFactory(redisClusterConfiguration(), jedisClientConfiguration());
     }
 
     @Bean
@@ -75,7 +80,7 @@ public class RedisClusterConfig {
 
         // 启用事务支持
         redisTemplate.setEnableTransactionSupport(true);
-        
+
         return redisTemplate;
     }
 }

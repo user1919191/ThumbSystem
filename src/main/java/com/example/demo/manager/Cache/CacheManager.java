@@ -1,5 +1,8 @@
 package com.example.demo.manager.Cache;
 
+import com.example.demo.manager.Cache.AddResult;
+import com.example.demo.manager.Cache.HeavyKeeper;
+import com.example.demo.manager.Cache.TopK;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import jakarta.annotation.Resource;
@@ -15,7 +18,7 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class CacheManager {
 
-    private TopK topK;
+    private com.example.demo.manager.Cache.TopK topK;
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
@@ -65,7 +68,7 @@ public class CacheManager {
         }
 
         // 3. 记录访问（计数 +1）
-        AddResult addResult = topK.add(key, 1);
+        com.example.demo.manager.Cache.AddResult addResult = topK.add(key, 1);
 
         // 4. 如果是热 Key 且不在本地缓存，则缓存数据
         if (addResult.isHotKey()) {
