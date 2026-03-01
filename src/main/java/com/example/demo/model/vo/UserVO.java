@@ -1,17 +1,21 @@
-package com.example.demo.model.entity;
+package com.example.demo.model.vo;
 
-import com.baomidou.mybatisplus.annotation.*;
 import lombok.Data;
 
+import java.io.Serializable;
 import java.time.LocalDateTime;
 
+/**
+ * 用户视图对象(脱敏)
+ */
 @Data
-@TableName("user")
-public class user {
+public class UserVO implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
     /**
      * 用户ID
      */
-    @TableId(type = IdType.AUTO)
     private Long id;
 
     /**
@@ -33,11 +37,6 @@ public class user {
      * 账号
      */
     private String account;
-
-    /**
-     * 密码
-     */
-    private String password;
 
     /**
      * 性别 0-女 1-男
@@ -63,15 +62,4 @@ public class user {
      * 创建时间
      */
     private LocalDateTime createTime;
-
-    /**
-     * 更新时间
-     */
-    private LocalDateTime updateTime;
-
-    /**
-     * 是否删除 0-未删除 1-已删除
-     */
-    @TableLogic
-    private Integer isDelete;
 }

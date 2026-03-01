@@ -25,9 +25,20 @@ create table thumbEvent(
 -- 用户表
 create table if not exists user
 (
-    id bigint auto_increment primary key,
-    username varchar(128) not null
-    );
+    id bigint auto_increment primary key comment '用户ID',
+    username varchar(128) not null comment '姓名',
+    age int comment '年龄',
+    profession varchar(128) comment '职业',
+    account varchar(128) not null unique comment '账号',
+    password varchar(256) not null comment '密码',
+    gender tinyint comment '性别 0-女 1-男',
+    avatar varchar(512) comment '头像地址',
+    email varchar(128) comment '邮箱',
+    expertise varchar(512) comment '擅长领域',
+    createTime datetime default CURRENT_TIMESTAMP not null comment '创建时间',
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDelete tinyint default 0 not null comment '是否删除 0-未删除 1-已删除'
+) comment '用户表';
 
 -- 博客表
 create table if not exists blog

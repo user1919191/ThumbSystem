@@ -1,6 +1,8 @@
 package com.example.demo.manager.Cache;
 
 import cn.hutool.core.util.HashUtil;
+import com.example.demo.manager.Cache.Item;
+import com.example.demo.manager.Cache.TopK;
 import lombok.Data;
 
 import java.util.*;
@@ -18,7 +20,7 @@ public class HeavyKeeper implements TopK {
     private final double[] lookupTable;
     private final Bucket[][] buckets;
     private final PriorityQueue<Node> minHeap;
-    private final BlockingQueue<Item> expelledQueue;
+    private final BlockingQueue<com.example.demo.manager.Cache.Item> expelledQueue;
     private final Random random;
     private long total;
     private final int minCount;
@@ -107,7 +109,7 @@ public class HeavyKeeper implements TopK {
                     Node newNode = new Node(key, maxCount);
                     if (minHeap.size() >= k) {
                         expelled = minHeap.poll().key;
-                        expelledQueue.offer(new Item(expelled, maxCount));
+                        expelledQueue.offer(new com.example.demo.manager.Cache.Item(expelled, maxCount));
                     }
                     minHeap.add(newNode);
                     isHot = true;
@@ -119,11 +121,11 @@ public class HeavyKeeper implements TopK {
     }
 
     @Override
-    public List<Item> list() {
+    public List<com.example.demo.manager.Cache.Item> list() {
         synchronized (minHeap) {
-            List<Item> result = new ArrayList<>(minHeap.size());
+            List<com.example.demo.manager.Cache.Item> result = new ArrayList<>(minHeap.size());
             for (Node node : minHeap) {
-                result.add(new Item(node.key, node.count));
+                result.add(new com.example.demo.manager.Cache.Item(node.key, node.count));
             }
             result.sort((a, b) -> Integer.compare(b.count(), a.count()));
             return result;

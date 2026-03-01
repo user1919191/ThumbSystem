@@ -2,6 +2,7 @@ package com.example.demo.compensation;
 
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.ObjUtil;
+import com.example.demo.compensation.SyncThumb2DBJob;
 import com.example.demo.constant.ThumbConstant;
 import com.example.demo.utils.RedisKeyUtil;
 import jakarta.annotation.Resource;

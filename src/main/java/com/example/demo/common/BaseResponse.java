@@ -1,6 +1,8 @@
 package com.example.demo.common;
 
 import java.io.Serializable;
+
+import com.example.demo.common.ErrorCode;
 import lombok.Data;
 
 /**
