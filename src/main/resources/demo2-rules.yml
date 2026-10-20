@@ -1,0 +1,386 @@
+# =============================================================================
+# demo2 监控指标
+# =============================================================================
+groups:
+  # 一、JVM
+  - name: demo2-jvm
+    interval: 15s
+    rules:
+      # 堆使用率（0~1）
+      - record: demo2:jvm_heap_usage:ratio
+        expr: |
+          sum(jvm_memory_used_bytes{job="demo2",application="demo2",env="local",area="heap"})
+          /
+          sum(jvm_memory_max_bytes{job="demo2",application="demo2",env="local",area="heap"})
+
+      # 非堆已使用字节数
+      - record: demo2:jvm_nonheap_used:bytes
+        expr: |
+          sum(jvm_memory_used_bytes{job="demo2",application="demo2",env="local",area="nonheap"})
+
+      # 活跃线程数
+      - record: demo2:jvm_live_threads:count
+        expr: |
+          max(jvm_threads_live_threads{job="demo2",application="demo2",env="local"})
+
+      # 死锁线程数
+      # 注意：Micrometer 不同版本可能暴露为 jvm_threads_deadlocked_threads，
+      #      以 /api/actuator/prometheus 实际输出为准。
+      - record: demo2:jvm_deadlocked_threads:count
+        expr: |
+          max(jvm_threads_deadlocked{job="demo2",application="demo2",env="local"})
+
+      # 进程 CPU 使用率（0~1，相对单核，可能大于 1）
+      - record: demo2:process_cpu_usage:ratio
+        expr: |
+          max(process_cpu_usage{job="demo2",application="demo2",env="local"})
+
+      # 已加载类数量
+      - record: demo2:jvm_classes_loaded:count
+        expr: |
+          max(jvm_classes_loaded_classes{job="demo2",application="demo2",env="local"})
+
+  # ===========================================================================
+  # 二、GC
+  # ===========================================================================
+  - name: demo2-gc
+    interval: 15s
+    rules:
+      # GC 时间占比（0~1）：每秒中有多少秒在 GC。> 0.1 表示 10% 时间在 GC
+      - record: demo2:gc_time_ratio:5m
+        expr: |
+          sum(rate(jvm_gc_pause_seconds_sum{job="demo2",application="demo2",env="local"}[5m]))
+
+      # 每分钟 GC 次数，按 cause 区分
+      - record: demo2:gc_pause_count_per_minute:5m
+        expr: |
+          sum by (cause) (
+            rate(jvm_gc_pause_seconds_count{job="demo2",application="demo2",env="local"}[5m])
+          ) * 60
+
+      # 单次最长停顿（秒），按 cause 区分
+      # jvm_gc_pause_seconds_max 是滚动窗口 gauge，必须用 max_over_time 取窗口内最大值
+      - record: demo2:gc_pause_max_seconds:5m
+        expr: |
+          max by (cause) (
+            max_over_time(jvm_gc_pause_seconds_max{job="demo2",application="demo2",env="local"}[5m])
+          )
+
+      # Full GC（major GC）次数增长
+      - record: demo2:gc_full_count:increase_10m
+        expr: |
+          sum(increase(jvm_gc_pause_seconds_count{job="demo2",application="demo2",env="local",action="end of major GC"}[10m]))
+
+  # ===========================================================================
+  # 三、QPS 与延迟
+  # ===========================================================================
+  - name: demo2-http
+    interval: 15s
+    rules:
+      # 总 QPS（包含 actuator）
+      - record: demo2:http_qps:1m
+        expr: |
+          sum(rate(http_server_requests_seconds_count{job="demo2",application="demo2",env="local"}[1m]))
+
+      # 业务 QPS（排除 actuator 自身抓取产生的请求）
+      - record: demo2:http_qps_business:1m
+        expr: |
+          sum(rate(http_server_requests_seconds_count{job="demo2",application="demo2",env="local",uri!~"/(api/)?actuator.*"}[1m]))
+
+      # 按接口分组的 QPS
+      - record: demo2:http_qps_by_uri:1m
+        expr: |
+          sum by (uri, method) (
+            rate(http_server_requests_seconds_count{job="demo2",application="demo2",env="local",uri!~"/(api/)?actuator.*"}[1m])
+          )
+
+      # P99 延迟（秒），按接口区分
+      # 依赖 management.metrics.distribution.percentiles-histogram.http.server.requests=true
+      - record: demo2:http_latency_p99_seconds:5m
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le, uri) (
+              rate(http_server_requests_seconds_bucket{job="demo2",application="demo2",env="local",uri!~"/(api/)?actuator.*"}[5m])
+            )
+          )
+
+      # 点赞写入 QPS（Pulsar 发送成功速率），换算业务吞吐最准
+      - record: demo2:thumb_write_qps:1m
+        expr: |
+          sum(rate(thumb_pulsar_send_success_total{job="demo2",application="demo2",env="local"}[1m]))
+
+      # 点赞接口 QPS（当前代码已有的 thumb_success_count_total / thumb_failure_count_total）
+      - record: demo2:thumb_api_qps:1m
+        expr: |
+          sum(rate(thumb_success_count_total{job="demo2",application="demo2",env="local"}[1m]))
+          +
+          sum(rate(thumb_failure_count_total{job="demo2",application="demo2",env="local"}[1m]))
+
+  # ===========================================================================
+  # 四、线程池
+  # ===========================================================================
+  - name: demo2-executor
+    interval: 15s
+    rules:
+      # 线程使用率：活跃线程 / 最大线程数
+      - record: demo2:executor_thread_usage:ratio
+        expr: |
+          max by (instance, pool_name) (executor_active_threads{job="demo2",application="demo2",env="local"})
+          /
+          clamp_min(
+            max by (instance, pool_name) (executor_max_pool_size{job="demo2",application="demo2",env="local"}),
+            1
+          )
+
+      # 池大小使用率：当前线程数 / 最大线程数
+      - record: demo2:executor_pool_usage:ratio
+        expr: |
+          max by (instance, pool_name) (executor_pool_size_threads{job="demo2",application="demo2",env="local"})
+          /
+          clamp_min(
+            max by (instance, pool_name) (executor_max_pool_size{job="demo2",application="demo2",env="local"}),
+            1
+          )
+
+      # 队列使用率：排队任务 / 队列容量
+      - record: demo2:executor_queue_usage:ratio
+        expr: |
+          max by (instance, pool_name) (executor_queued_threads{job="demo2",application="demo2",env="local"})
+          /
+          clamp_min(
+            max by (instance, pool_name) (executor_queue_capacity{job="demo2",application="demo2",env="local"}),
+            1
+          )
+
+      # 队列剩余容量
+      - record: demo2:executor_queue_remaining:count
+        expr: |
+          max by (instance, pool_name) (executor_queue_remaining_capacity{job="demo2",application="demo2",env="local"})
+
+      # 任务完成速率（个/秒）
+      # executor_completed_tasks_total 是累计型 gauge，rate 可以兼容进程重启后的回落
+      - record: demo2:executor_task_rate:1m
+        expr: |
+          sum by (instance, pool_name) (
+            rate(executor_completed_tasks_total{job="demo2",application="demo2",env="local"}[1m])
+          )
+
+  # ===========================================================================
+  # 五、成功率
+  # ===========================================================================
+  - name: demo2-success-rate
+    interval: 15s
+    rules:
+      # 1) 接口成功率：非 5xx 请求 / 全部请求（排除 actuator）
+      - record: demo2:api_success_rate:5m
+        expr: |
+          sum(rate(http_server_requests_seconds_count{job="demo2",application="demo2",env="local",uri!~"/(api/)?actuator.*",status!~"5.."}[5m]))
+          /
+          clamp_min(
+            sum(rate(http_server_requests_seconds_count{job="demo2",application="demo2",env="local",uri!~"/(api/)?actuator.*"}[5m])),
+            1e-9
+          )
+
+      # 2) 生产者成功率：发送成功 / (发送成功 + 发送失败)
+      - record: demo2:pulsar_producer_success_rate:5m
+        expr: |
+          sum(rate(thumb_pulsar_send_success_total{job="demo2",application="demo2",env="local"}[5m]))
+          /
+          clamp_min(
+            sum(rate(thumb_pulsar_send_success_total{job="demo2",application="demo2",env="local"}[5m]))
+            +
+            (sum(rate(thumb_pulsar_send_failure_total{job="demo2",application="demo2",env="local"}[5m])) or vector(0)),
+            1e-9
+          )
+
+      # 3) 消费者成功率：(消费消息数 - 处理失败数 - 死信数) / 消费消息数
+      - record: demo2:consumer_success_rate:5m
+        expr: |
+          (
+            sum(rate(thumb_consumer_message_total{job="demo2",application="demo2",env="local"}[5m]))
+            -
+            (sum(rate(thumb_consumer_failure_total{job="demo2",application="demo2",env="local"}[5m])) or vector(0))
+            -
+            (sum(rate(thumb_consumer_dlq_total{job="demo2",application="demo2",env="local"}[5m])) or vector(0))
+          )
+          /
+          clamp_min(
+            sum(rate(thumb_consumer_message_total{job="demo2",application="demo2",env="local"}[5m])),
+            1e-9
+          )
+
+      # 4) MQ 端到端成功率：消费消息数 / 生产成功数（上限 1）
+      - record: demo2:mq_end_to_end_success_rate:5m
+        expr: |
+          clamp_max(
+            sum(rate(thumb_consumer_message_total{job="demo2",application="demo2",env="local"}[5m]))
+            /
+            clamp_min(
+              sum(rate(thumb_pulsar_send_success_total{job="demo2",application="demo2",env="local"}[5m])),
+              1e-9
+            ),
+            1
+          )
+
+      # 5) 补偿成功率：补偿成功 / 补偿尝试
+      - record: demo2:compensation_success_rate:5m
+        expr: |
+          (sum(rate(thumb_compensation_success_total{job="demo2",application="demo2",env="local"}[5m])) or vector(0))
+          /
+          clamp_min(
+            sum(rate(thumb_compensation_attempt_total{job="demo2",application="demo2",env="local"}[5m])),
+            1e-9
+          )
+
+      # 6) 点赞业务成功率（当前代码已有指标，不依赖新埋点）
+      - record: demo2:thumb_business_success_rate:5m
+        expr: |
+          (sum(rate(thumb_success_count_total{job="demo2",application="demo2",env="local"}[5m])) or vector(0))
+          /
+          clamp_min(
+            (sum(rate(thumb_success_count_total{job="demo2",application="demo2",env="local"}[5m])) or vector(0))
+            +
+            (sum(rate(thumb_failure_count_total{job="demo2",application="demo2",env="local"}[5m])) or vector(0)),
+            1e-9
+          )
+
+  # ===========================================================================
+  # 六、告警规则
+  # ===========================================================================
+  - name: demo2-alerts
+    interval: 15s
+    rules:
+      - alert: Demo2JvmHeapUsageHigh
+        expr: demo2:jvm_heap_usage:ratio > 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "demo2 堆内存使用率超过 85%"
+          description: "当前堆使用率 {{ $value | humanizePercentage }}，持续 10 分钟。"
+
+      - alert: Demo2JvmHeapUsageCritical
+        expr: demo2:jvm_heap_usage:ratio > 0.95
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "demo2 堆内存使用率超过 95%"
+          description: "当前堆使用率 {{ $value | humanizePercentage }}，存在 OOM 风险。"
+
+      - alert: Demo2JvmDeadlock
+        expr: demo2:jvm_deadlocked_threads:count > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "demo2 检测到死锁线程"
+          description: "死锁线程数 {{ $value }}，请立即 dump 线程栈。"
+
+      - alert: Demo2GcTimeRatioHigh
+        expr: demo2:gc_time_ratio:5m > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "demo2 GC 时间占比超过 10%"
+          description: "近 5 分钟 GC 时间占比 {{ $value | humanizePercentage }}。"
+
+      - alert: Demo2GcPauseLong
+        expr: max(demo2:gc_pause_max_seconds:5m) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "demo2 单次 GC 停顿超过 1s"
+          description: "近 5 分钟最长 GC 停顿 {{ $value }}s。"
+
+      - alert: Demo2FullGcOccurred
+        expr: sum(demo2:gc_full_count:increase_10m) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "demo2 10 分钟内发生 Full GC"
+          description: "Full GC 次数增长 {{ $value }}，请检查内存分配与老年代占用。"
+
+      - alert: Demo2HttpP99LatencyHigh
+        expr: max(demo2:http_latency_p99_seconds:5m) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "demo2 接口 P99 延迟超过 1s"
+          description: "最高 P99 为 {{ $value }}s。"
+
+      - alert: Demo2ApiSuccessRateLow
+        expr: demo2:api_success_rate:5m < 0.99 and demo2:http_qps_business:1m > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "demo2 接口成功率低于 99%"
+          description: "近 5 分钟接口成功率 {{ $value | humanizePercentage }}。"
+
+      - alert: Demo2PulsarProducerSuccessRateLow
+        expr: demo2:pulsar_producer_success_rate:5m < 0.99 and demo2:thumb_write_qps:1m > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "demo2 Pulsar 生产者成功率低于 99%"
+          description: "近 5 分钟发送成功率 {{ $value | humanizePercentage }}。"
+
+      - alert: Demo2ConsumerSuccessRateLow
+        expr: demo2:consumer_success_rate:5m < 0.99 and sum(rate(thumb_consumer_message_total{job="demo2",application="demo2",env="local"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "demo2 消费者成功率低于 99%"
+          description: "近 5 分钟消费成功率 {{ $value | humanizePercentage }}。"
+
+      - alert: Demo2MqEndToEndSuccessRateLow
+        expr: demo2:mq_end_to_end_success_rate:5m < 0.98 and demo2:thumb_write_qps:1m > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "demo2 MQ 端到端成功率低于 98%"
+          description: "近 5 分钟端到端成功率 {{ $value | humanizePercentage }}，可能存在消息丢失或消费堆积。"
+
+      - alert: Demo2CompensationSuccessRateLow
+        expr: demo2:compensation_success_rate:5m < 0.95 and sum(rate(thumb_compensation_attempt_total{job="demo2",application="demo2",env="local"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "demo2 补偿成功率低于 95%"
+          description: "近 5 分钟补偿成功率 {{ $value | humanizePercentage }}，Redis 与 DB 差异可能无法收敛。"
+
+      - alert: Demo2ThreadPoolQueueSaturated
+        expr: max by (instance, pool_name) (demo2:executor_queue_usage:ratio) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "demo2 线程池队列使用率超过 80%"
+          description: "实例 {{ $labels.instance }} 线程池 {{ $labels.pool_name }} 队列使用率 {{ $value | humanizePercentage }}。"
+
+      - alert: Demo2ThreadPoolActiveHigh
+        expr: max by (instance, pool_name) (demo2:executor_thread_usage:ratio) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "demo2 线程池活跃线程占比超过 90%"
+          description: "实例 {{ $labels.instance }} 线程池 {{ $labels.pool_name }} 活跃线程占比 {{ $value | humanizePercentage }}。"
+
+      - alert: Demo2ProcessCpuHigh
+        expr: demo2:process_cpu_usage:ratio > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "demo2 进程 CPU 使用率超过 80%"
+          description: "当前进程 CPU 使用率 {{ $value | humanizePercentage }}。"
