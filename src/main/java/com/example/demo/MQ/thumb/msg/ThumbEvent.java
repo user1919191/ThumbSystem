@@ -15,6 +15,16 @@ import java.time.LocalDateTime;
 @Data
 @Builder
 public class ThumbEvent {
+
+    public ThumbEvent(Long userId, Long blogId, ThumbEvent.ThumbType thumbType, LocalDateTime timestamp) {
+        this.userId = userId;
+        this.blogId = blogId;
+        this.type = thumbType;
+        this.localDateTime = timestamp;
+    }
+
+    private String id;
+
     private Long userId;
 
     private Long blogId;

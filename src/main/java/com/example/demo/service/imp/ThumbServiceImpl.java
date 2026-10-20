@@ -1,6 +1,8 @@
 package com.example.demo.service.imp;
 
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.example.demo.MQ.thumb.Publish.PulsarThumbEventPublisher;
+import com.example.demo.MQ.thumb.Publish.ThumbEventPublisher;
 import com.example.demo.MQ.thumb.msg.ThumbEvent;
 import com.example.demo.common.ErrorCode;
 import com.example.demo.constant.ThumbConstant;
@@ -46,13 +48,14 @@ public class ThumbServiceImpl extends ServiceImpl<ThumbMapper, thumb>
     @Resource
     private final StringRedisTemplate stringRedisTemplate;
 
+    @Resource
     private final CacheManager cacheManager;
 
     @Resource
     private final RedissonClient redissonClient;
 
     @Resource
-    private final PulsarTemplate<ThumbEvent> pulsarTemplate;
+    private final ThumbEventPublisher thumbEventPublisher;
 
     @Override
     public Boolean doThumb(DoThumbRequest doThumbRequest, HttpServletRequest request) {
@@ -97,7 +100,7 @@ public class ThumbServiceImpl extends ServiceImpl<ThumbMapper, thumb>
                         .type(ThumbEvent.ThumbType.INCREASE)
                         .localDateTime(LocalDateTime.now())
                         .build();
-                pulsarTemplate.send("thumb-topic", event);
+                thumbEventPublisher.Publication(event);
                 log.info("发送点赞消息成功: userId={}, blogId={}", userId, blogId);
             } catch (Exception e) {
                 log.error("发送点赞消息到Pulsar失败: userId={}, blogId={}", userId, blogId, e);
@@ -157,13 +160,15 @@ public class ThumbServiceImpl extends ServiceImpl<ThumbMapper, thumb>
 
             // 5.发送MQ消息（异步同步数据库）
             try {
+                String id = ThumbConstant.USER_THUMB_KEY_PREFIX + userId + "_" + blogId + "_" + LocalDateTime.now().toString();
                 ThumbEvent event = ThumbEvent.builder()
+                        .id(id)
                         .userId(userId)
                         .blogId(blogId)
                         .type(ThumbEvent.ThumbType.DECREASE)
                         .localDateTime(LocalDateTime.now())
                         .build();
-                pulsarTemplate.send("thumb-topic", event);
+                thumbEventPublisher.Publication(event);
                 log.info("发送取消点赞消息成功: userId={}, blogId={}", userId, blogId);
             } catch (Exception e) {
                 log.error("发送取消点赞消息到Pulsar失败: userId={}, blogId={}", userId, blogId, e);

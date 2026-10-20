@@ -49,7 +49,16 @@ management:
       exposure:
         include: health, prometheus
   metrics:
+    # 所有指标统一附加的公共标签，PromQL 中的 application / env 即来源于此
+    tags:
+      application: demo2
+      env: local
     distribution:
+      # histogram_quantile(P99) 依赖 _bucket，必须开启
+      percentiles-histogram:
+        http:
+          server:
+            requests: true
       percentiles:
         http:
           server:
