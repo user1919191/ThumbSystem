@@ -12,6 +12,7 @@ import com.example.demo.mapper.ThumbMapper;
 import com.example.demo.model.dto.DoThumbRequest;
 import com.example.demo.model.entity.thumb;
 import com.example.demo.model.entity.user;
+import com.example.demo.monitor.ThumbMetricsRecorder;
 import com.example.demo.service.BlogService;
 import com.example.demo.service.ThumbService;
 import com.example.demo.service.UserService;

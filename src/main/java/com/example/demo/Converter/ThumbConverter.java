@@ -6,10 +6,13 @@ import com.example.demo.MQ.thumb.msg.ThumbMetricEvent;
 
 public class ThumbConverter {
 
-    public static ThumbMetricEvent ThumbE2ThumbME(ThumbEvent thumbEvent,Integer stepStatus,
-                                                  Integer parentStepStatus,String msg){
+    private ThumbConverter() {
+    }
+
+    public static ThumbMetricEvent thumbEventToMetricEvent(ThumbEvent thumbEvent, String stepStatus,
+                                                            String parentStepStatus, String msg) {
         ThumbMetricEvent thumbMetricEvent = new ThumbMetricEvent();
-        String id = IdUtil.getSnowflake().toString();
+        String id = thumbEvent.getId() == null ? IdUtil.getSnowflake().toString() : thumbEvent.getId();
         thumbMetricEvent.setId(id);
         thumbMetricEvent.setStepStatus(stepStatus);
         thumbMetricEvent.setParentStepStatus(parentStepStatus);

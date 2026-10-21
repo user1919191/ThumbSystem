@@ -1,24 +1,18 @@
 package com.example.demo.model.enums;
 
-import lombok.AllArgsConstructor;
 import lombok.Getter;
 
 @Getter
 public enum StepStatusEnum {
-    Redis("1","Redis执行成功"),
-    MQProducer("2-1","MQ生产者发送成功"),
-    MQProducerFail("2-2","MQ生产则会发送失败"),
-    MQProducerRetry("2-2-1","MQ生产者投递失败，重试中"),
-    MQProducerRetrySuccess("2-2-1-1","MQ生产者投递失败，重试成功"),
-    MQProducerRetryFail("2-2-1-2","MQ生产者投递失败，重试失败"),
-    MQConsumer("3-1","MQ消费者消费成功"),
-    MQConsumerFail("3-2","MQ消费者消费失败"),
-    MQConsumerDeadQueue("3-3","MQ消费者消费失败，已经进入死信队列"),
-    DBSuccess("4-1","DB写入成功"),
-    DBFail("4-2","DB写入失败");
-
-
-
+    REDIS_WRITTEN("REDIS_WRITTEN", "Redis写入成功"),
+    MQ_SENT("MQ_SENT", "Pulsar生产者发送成功"),
+    MQ_SEND_FAILED("MQ_SEND_FAILED", "Pulsar生产者发送失败"),
+    MQ_SEND_RETRY_PENDING("MQ_SEND_RETRY_PENDING", "Pulsar发送失败，已写入本地重试表"),
+    CONSUMED("CONSUMED", "Pulsar消费者接收成功"),
+    CONSUME_FAILED("CONSUME_FAILED", "Pulsar消费者处理失败"),
+    DLQ("DLQ", "消息已进入死信队列"),
+    DB_COMMITTED("DB_COMMITTED", "DB事务提交成功"),
+    DB_COMMIT_FAILED("DB_COMMIT_FAILED", "DB事务提交失败");
 
     private final String stepId;
 

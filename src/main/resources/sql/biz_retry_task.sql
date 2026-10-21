@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS biz_retry_task (
+  id             BIGINT PRIMARY KEY AUTO_INCREMENT,
+  task_no        VARCHAR(40)  NOT NULL UNIQUE,
+  biz_type       VARCHAR(32)  NOT NULL,
+  biz_key        VARCHAR(128) NOT NULL COMMENT '如 blogId:userId',
+  event_id       VARCHAR(64),
+  scene          VARCHAR(32)  NOT NULL COMMENT 'DB_WRITE/REDIS_WRITE/MQ_SEND/HTTP_CALL',
+  payload        JSON         NOT NULL,
+  status         VARCHAR(16)  NOT NULL COMMENT 'PENDING/RETRYING/SUCCESS/DEAD/CANCELLED',
+  attempt        INT          NOT NULL DEFAULT 0,
+  max_attempt    INT          NOT NULL DEFAULT 5,
+  next_retry_at  DATETIME     NOT NULL,
+  last_error     VARCHAR(512),
+  idempotent_key VARCHAR(128) NOT NULL,
+  owner          VARCHAR(64)  COMMENT '抢占实例，便于排障',
+  version        INT          NOT NULL DEFAULT 0,
+  created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_idem (idempotent_key),
+  KEY idx_scan (status, next_retry_at),
+  KEY idx_biz (biz_type, biz_key)
+);
