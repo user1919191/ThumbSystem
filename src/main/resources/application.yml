@@ -11,6 +11,10 @@ spring:
     url: jdbc:mysql://localhost:4000/thumbSystem
     username: leikooo
     password: YourPass123
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:sql/biz_retry_task.sql
   data:
     redis:
       # 单节点配置 (注释掉，使用集群配置)
