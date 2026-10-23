@@ -67,3 +67,13 @@ management:
         http:
           server:
             requests: 0.5, 0.75, 0.9, 0.95, 0.99
+# Prometheus HTTP API 查询配置（Agent 工具使用）
+prometheus:
+  base-url: http://localhost:9090
+  timeout: 3s
+  job: demo2
+  application: demo2
+  env: local
+  default-qps-window: 1m
+  default-success-window: 5m
+  default-endpoint-window: 5m

@@ -3,9 +3,10 @@ package com.example.demo.Agent.Service.impl;
 import com.example.demo.Agent.Service.ToolsService;
 import com.example.demo.mapper.BizRetryTaskMapper;
 import com.example.demo.model.entity.BizRetryTask;
+import com.example.demo.monitor.prometheus.Entry.EndpointMetrics;
+import com.example.demo.monitor.prometheus.EndpointMetricsQueryService;
+import com.example.demo.monitor.prometheus.Entry.OverviewMetrics;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageId;
@@ -16,9 +17,7 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Service;
 
-import java.lang.management.GarbageCollectorMXBean;
-import java.lang.management.ManagementFactory;
-import java.lang.management.MemoryUsage;
+import java.lang.management.*;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -26,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -34,15 +34,15 @@ public class ToolsServiceImpl implements ToolsService {
     private static final int DEFAULT_LIMIT = 20;
     private static final int MAX_LIMIT = 100;
     private static final int MAX_PAYLOAD_CHARS = 4096;
+
     private final BizRetryTaskMapper retryTaskMapper;
     private final PulsarClient pulsarClient;
-    private final MeterRegistry meterRegistry;
-    private long previousHttpCount = -1;
-    private long previousSampleNanos;
+    private final EndpointMetricsQueryService endpointMetricsQueryService;
 
     @Override
-    @Tool(description = "Current JVM memory, threads, cumulative GC statistics and HTTP QPS since previous sample")
-    public Map<String, Object> queryJvmGcQpsStatus() {
+    @Tool(description = "Current JVM memory,cumulative GC statistics")
+    public Map<String, Object> queryJvmGcStatus() {
+        // 获取JVM整体信息
         MemoryUsage heap = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
         Map<String, Object> jvm = new LinkedHashMap<>();
         jvm.put("heapUsedBytes", heap.getUsed());
@@ -50,28 +50,74 @@ public class ToolsServiceImpl implements ToolsService {
         jvm.put("heapMaxBytes", heap.getMax());
         jvm.put("threadCount", ManagementFactory.getThreadMXBean().getThreadCount());
         jvm.put("uptimeMs", ManagementFactory.getRuntimeMXBean().getUptime());
+
+        //获取GC信息
         List<Map<String, Object>> gc = new ArrayList<>();
         for (GarbageCollectorMXBean collector : ManagementFactory.getGarbageCollectorMXBeans()) {
             gc.add(Map.of("name", collector.getName(), "collectionCount", collector.getCollectionCount(),
                     "collectionTimeMs", collector.getCollectionTime()));
         }
+
+        //获取内存池详细信息
+        List<MemoryPoolMXBean> memoryPoolMXBeans = ManagementFactory.getMemoryPoolMXBeans();
+        LinkedHashMap<String, MemoryUsage> memoryUsageLinkedHashMap = memoryPoolMXBeans.stream().collect(Collectors.toMap(MemoryPoolMXBean::getName, MemoryPoolMXBean::getUsage, (a, b) -> b,
+                LinkedHashMap::new));
+        String memoryUsage = memoryUsageLinkedHashMap.toString();
+
         return Map.of("capturedAt", Instant.now().toString(), "jvm", jvm,
-                "gc", gc, "httpQps", sampleHttpQps());
+                "gc", gc, "memoryUsage", memoryUsage);
     }
 
-    private synchronized Map<String, Object> sampleHttpQps() {
-        long requests = meterRegistry.find("http.server.requests").timers().stream()
-                .mapToLong(Timer::count).sum();
-        long now = System.nanoTime();
-        Double qps = previousHttpCount < 0 ? null
-                : Math.max(0, requests - previousHttpCount) /
-                (Math.max(1L, now - previousSampleNanos) / 1_000_000_000.0);
-        previousHttpCount = requests;
-        previousSampleNanos = now;
+    @Override
+    @Tool(description = "Current HTTP QPS and success rate from Prometheus")
+    public Map<String, Object> queryQpsStatus() {
+        try {
+            OverviewMetrics metrics = endpointMetricsQueryService.queryOverview();
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("source", "prometheus");
+            result.put("available", true);
+            result.put("qps", metrics.qps());
+            result.put("window", metrics.qpsWindow());
+            result.put("successRate", metrics.successRate());
+            result.put("successWindow", metrics.successWindow());
+            result.put("requestCountSinceStart", metrics.totalRequests());
+            result.put("measuredAt", metrics.measuredAt().toString());
+            return result;
+        } catch (RuntimeException exception) {
+            return prometheusError(exception);
+        }
+    }
+
+    @Override
+    @Tool(description = "Query QPS, success rate and P99 of a specific HTTP endpoint from Prometheus")
+    public Map<String, Object> queryEndpointMetrics(
+            @ToolParam(description = "URI template, e.g. /api/thumb/do") String uri,
+            @ToolParam(description = "HTTP method: GET/POST/PUT/DELETE/PATCH") String method,
+            @ToolParam(description = "Window: 1m/5m/15m/30m/1h/6h/24h") String window) {
+        try {
+            EndpointMetrics metrics = endpointMetricsQueryService.query(uri, method, window);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("source", "prometheus");
+            result.put("available", true);
+            result.put("uri", metrics.uri());
+            result.put("method", metrics.method());
+            result.put("window", metrics.window());
+            result.put("qps", metrics.qps());
+            result.put("successRate", metrics.successRate());
+            result.put("p99Seconds", metrics.p99Seconds());
+            result.put("measuredAt", metrics.measuredAt().toString());
+            return result;
+        } catch (RuntimeException exception) {
+            return prometheusError(exception);
+        }
+    }
+
+    private Map<String, Object> prometheusError(Exception exception) {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("qps", qps);
-        result.put("requestCountSinceStart", requests);
-        result.put("sampleReady", qps != null);
+        result.put("source", "prometheus");
+        result.put("available", false);
+        result.put("error", exception.getMessage());
+        result.put("measuredAt", Instant.now().toString());
         return result;
     }
 
