@@ -24,4 +24,5 @@ public class PrometheusProperties {
     private String defaultQpsWindow = "1m";
     private String defaultSuccessWindow = "5m";
     private String defaultEndpointWindow = "5m";
+    private String defaultStep = "15s";
 }

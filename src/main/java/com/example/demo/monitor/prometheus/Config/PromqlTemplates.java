@@ -51,8 +51,103 @@ public final class PromqlTemplates {
                 + matchers + "}[" + window + "])))";
     }
 
+    public static String errorRate(String matchers, String window) {
+        validateWindow(window);
+        String errorMatchers = matchers + ",status=~\"5..\"";
+        return "sum(rate(http_server_requests_seconds_count{" + errorMatchers + "}[" + window + "]))"
+                + " / clamp_min(sum(rate(http_server_requests_seconds_count{"
+                + matchers + "}[" + window + "])), 1e-9)";
+    }
+
+    public static String avgLatency(String matchers, String window) {
+        validateWindow(window);
+        return "sum(rate(http_server_requests_seconds_sum{" + matchers + "}[" + window + "]))"
+                + " / clamp_min(sum(rate(http_server_requests_seconds_count{"
+                + matchers + "}[" + window + "])), 1e-9)";
+    }
+
+    public static String qpsByEndpoint(String matchers, String window) {
+        validateWindow(window);
+        return "sum by (uri, method) (rate(http_server_requests_seconds_count{"
+                + matchers + "}[" + window + "]))";
+    }
+
+    public static String successRateByEndpoint(String matchers, String window) {
+        validateWindow(window);
+        String successMatchers = matchers + ",status!~\"5..\"";
+        return "sum by (uri, method) (rate(http_server_requests_seconds_count{"
+                + successMatchers + "}[" + window + "]))"
+                + " / clamp_min(sum by (uri, method) (rate(http_server_requests_seconds_count{"
+                + matchers + "}[" + window + "])), 1e-9)";
+    }
+
+    public static String errorRateByEndpoint(String matchers, String window) {
+        validateWindow(window);
+        String errorMatchers = matchers + ",status=~\"5..\"";
+        return "sum by (uri, method) (rate(http_server_requests_seconds_count{"
+                + errorMatchers + "}[" + window + "]))"
+                + " / clamp_min(sum by (uri, method) (rate(http_server_requests_seconds_count{"
+                + matchers + "}[" + window + "])), 1e-9)";
+    }
+
+    public static String p99ByEndpoint(String matchers, String window) {
+        validateWindow(window);
+        return "histogram_quantile(0.99, sum by (le, uri, method) "
+                + "(rate(http_server_requests_seconds_bucket{" + matchers + "}[" + window + "])))";
+    }
+
+    public static String avgLatencyByEndpoint(String matchers, String window) {
+        validateWindow(window);
+        return "sum by (uri, method) (rate(http_server_requests_seconds_sum{"
+                + matchers + "}[" + window + "]))"
+                + " / clamp_min(sum by (uri, method) (rate(http_server_requests_seconds_count{"
+                + matchers + "}[" + window + "])), 1e-9)";
+    }
+
     public static String totalRequests(String matchers) {
         return "sum(http_server_requests_seconds_count{" + matchers + "})";
+    }
+
+    public static String heapUsage(String matchers) {
+        return "sum(jvm_memory_used_bytes{" + matchers + ",area=\"heap\"})"
+                + " / sum(jvm_memory_max_bytes{" + matchers + ",area=\"heap\"})";
+    }
+
+    public static String nonheapUsed(String matchers) {
+        return "sum(jvm_memory_used_bytes{" + matchers + ",area=\"nonheap\"})";
+    }
+
+    public static String liveThreads(String matchers) {
+        return "max(jvm_threads_live_threads{" + matchers + "})";
+    }
+
+    public static String deadlockedThreads(String matchers) {
+        return "max(jvm_threads_deadlocked{" + matchers + "}"
+                + " or jvm_threads_deadlocked_threads{" + matchers + "})";
+    }
+
+    public static String processCpu(String matchers) {
+        return "max(process_cpu_usage{" + matchers + "})";
+    }
+
+    public static String classesLoaded(String matchers) {
+        return "max(jvm_classes_loaded_classes{" + matchers + "})";
+    }
+
+    public static String gcTimeRatio(String matchers, String window) {
+        validateWindow(window);
+        return "sum(rate(jvm_gc_pause_seconds_sum{" + matchers + "}[" + window + "]))";
+    }
+
+    public static String gcPauseMax(String matchers, String window) {
+        validateWindow(window);
+        return "max(max_over_time(jvm_gc_pause_seconds_max{" + matchers + "}[" + window + "]))";
+    }
+
+    public static String fullGcCount(String matchers, String window) {
+        validateWindow(window);
+        return "sum(increase(jvm_gc_pause_seconds_count{" + matchers
+                + ",action=\"end of major GC\"}[" + window + "]))";
     }
 
     private static void validateWindow(String window) {

@@ -13,6 +13,8 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.net.http.HttpClient;
+import java.time.Duration;
+import java.time.Instant;
 
 /**
  * Prometheus HTTP API 客户端
@@ -43,9 +45,37 @@ public class PrometheusQueryClient {
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("query", promql);
         form.add("timeout", properties.getTimeout().toMillis() + "ms");
+        return execute("/api/v1/query", form);
+    }
+
+    /**
+     * 在指定时间点执行 PromQL，用于同比/基线对比。
+     */
+    public PrometheusResponse queryAt(String promql, Instant time) {
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("query", promql);
+        form.add("time", String.valueOf(time.getEpochSecond()));
+        form.add("timeout", properties.getTimeout().toMillis() + "ms");
+        return execute("/api/v1/query", form);
+    }
+
+    /**
+     * 执行 PromQL 区间查询。
+     */
+    public PrometheusResponse queryRange(String promql, Instant start, Instant end, Duration step) {
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("query", promql);
+        form.add("start", String.valueOf(start.getEpochSecond()));
+        form.add("end", String.valueOf(end.getEpochSecond()));
+        form.add("step", Math.max(1, step.getSeconds()) + "s");
+        form.add("timeout", properties.getTimeout().toMillis() + "ms");
+        return execute("/api/v1/query_range", form);
+    }
+
+    private PrometheusResponse execute(String path, MultiValueMap<String, String> form) {
         try {
             PrometheusResponse response = restClient.post()
-                    .uri("/api/v1/query")
+                    .uri(path)
                     .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                     .body(form)
                     .retrieve()
