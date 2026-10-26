@@ -5,6 +5,6 @@ import com.example.demo.Agent.Service.AgentService;
 import org.springframework.stereotype.Service;
 
 @Service
-public class AgentServiceimpl implements AgentService {
+public class AgentServiceImpl implements AgentService {
 
 }
