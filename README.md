@@ -10,7 +10,8 @@
 
 ## 技术栈选型
 
-* 后端框架：Spring Boot 3 + Java 21
+* 后端框架：Spring Boot 3 + Java 21 + SpringAI + Agent
+* AI工作流：LangGraph4J
 * 数据访问：MyBatis-Plus
 * 分布式数据库：TiDB
 * 内存数据库: Caffeine
@@ -240,3 +241,73 @@ spring:
           period: 2000
 ```
 
+## AI结合：Agent辅助对账与异常处理
+
+在 Redis → Pulsar → TiDB 的最终一致性链路上，AI Agent 不直接替代业务链路，也不直接执行任意写操作，而是作为**对账差异分析与受控补偿编排层**：先采集可验证证据，再由 LLM 分析异常，最后由确定性代码完成校验、审批分流和执行。
+
+### AI能力定位
+
+| 能力 | 作用 |
+| --- | --- | 
+| 证据采集 | 查询 Redis、DB、DLQ、重试任务和日志 | 
+| 异常诊断 | 分析差异原因，输出 A1-A8 分类和置信度 | 
+| 证据校验 | 验证 evidenceId、字段和值是否真实存在 | 
+| 补偿计划 | 根据诊断生成 dry-run 计划 |
+| 审批分流 | 低置信度、高风险或规则降级时生成审批任务 | 
+| 补偿执行 | 写 DB、写 Redis、删除 Redis或重算计数 | 
+| 汇总追踪 | 记录每条差异、每轮诊断和最终结果 | 
+
+### AI对账核心链路
+
+```mermaid
+flowchart LR
+    R[ThumbReconcile 对账扫描] --> B[AgentServiceClient]
+    B --> G[ReconcileGraphRunner / BatchOrchestrator]
+    G --> E[EvidenceCollector]
+    E --> S[EvidenceSnapshot]
+    S --> A[ReconcileAgent]
+    A <--> T[只读工具集]
+    A --> V[DiagnosisValidator]
+    V -->|证据不足，第1轮| E2[补充证据]
+    E2 --> A
+    V -->|证据冲突或两轮低置信度| P[审批任务入库]
+    V -->|通过| PL[CompensationPlanner dry-run]
+    PL -->|需审批| P
+    PL -->|可自动执行| X[CompensationExecutor]
+    X --> W[Redis / TiDB / 计数]
+    G --> Q[ea_reconcile_item_trace]
+    A --> H[ea_reconcile_agent_round]
+    G --> RP[ReconcileReportService 汇总]
+    X --> RP
+    RP --> HTML[HTML 报告 + JSON]
+    P --> Q
+    X --> Q
+```
+
+### 单条差异处理流程
+
+1. 对账任务产生 `ReconcileDiffItem`，通过 `AgentServiceClient#batchExecute` 进入 Agent。
+2. `EvidenceCollector` 采集 Redis 和 DB 核心状态，并按需补充 DLQ、重试表和日志证据。
+3. `ReconcileAgent` 使用 Spring AI 调用模型，只注册 `ReconcileReadTools` 只读工具。
+4. `DiagnosisValidator` 校验模型输出，包括分类白名单、置信度、证据引用和 Redis/DB 状态一致性。
+5. 低置信度时最多进行两轮 Agent 诊断：
+   - 证据不足：第一轮允许补充一次证据。
+   - 证据冲突：立即停止 Agent，转人工审批。
+   - 第二轮后仍低置信度：无论原因是什么，都转人工审批。
+6. `CompensationPlanner` 根据合法诊断生成补偿计划。
+7. 可自动执行的计划进入 `CompensationExecutor`；需要人工的计划规范化写入DB。
+8. 每条差异最终写入 `ea_reconcile_item_trace`，每轮 Agent 诊断写入DB。
+
+
+### A1-A8异常诊断
+
+| 分类 | 典型现象 | AI处理建议 |
+| --- | --- | --- |
+| A1 | Redis 写成功，Pulsar 发送失败 | 记录生产端失败并告警 |
+| A2 | DLQ 消息对应记录已存在 DB | 幂等成功，跳过补偿 |
+| A3 | DB 缺失、Redis 状态存在，且有重试或 DLQ 证据 | 校验后补写 DB |
+| A4 | Redis、DB 或关键上下文不足 | 人工审查 |
+| A5 | 对账发现 Redis 有、DB 无 | 生成补写 DB 计划 |
+| A6 | 对账发现 DB 有、Redis 无 | 默认人工确认或回填 Redis，不自动删 DB |
+| A7 | 同一 `bizKey` 事件乱序或重复 | 去重并视影响范围人工处理 |
+| A8 | DB 提交超时，实际状态未知 | 先回查 DB，再决定是否补偿 |
