@@ -48,6 +48,13 @@
             <version>1.0.0-M6.1</version>
         </dependency>
 
+        <!-- LangChain4j -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j</artifactId>
+            <version>1.1.0</version>
+        </dependency>
+
         <!-- 引入 spring-pulsar -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

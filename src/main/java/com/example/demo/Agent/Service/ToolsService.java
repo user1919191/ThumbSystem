@@ -27,4 +27,5 @@ public interface ToolsService {
     Map<String, Object> deleteRedisThumb(Long userId, Long blogId, Boolean dryRun);
     Map<String, Object> insertDbThumb(Long userId, Long blogId, Boolean dryRun);
     Map<String, Object> deleteDbThumb(Long userId, Long blogId, Boolean dryRun);
+    Map<String, Object> recomputeDbThumbCount(Long blogId, Boolean dryRun);
 }

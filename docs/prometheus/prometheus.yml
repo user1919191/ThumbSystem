@@ -1,0 +1,28 @@
+# =============================================================================
+# Prometheus 采集配置（demo2）
+# 启动示例：
+#   prometheus --config.file=docs/prometheus/prometheus.yml
+#
+# 说明：
+#   1. application / env 两个标签由应用侧 management.metrics.tags 注入，
+#      此处不要再通过 static_configs.labels 重复声明，否则会产生同名标签冲突。
+#   2. job 标签由 job_name 生成，PromQL 中统一使用 job="demo2"。
+# =============================================================================
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+
+rule_files:
+  - rules/demo2-rules.yml
+
+scrape_configs:
+  - job_name: demo2
+    metrics_path: /api/actuator/prometheus
+    scheme: http
+    static_configs:
+      - targets:
+          - localhost:9199
+        # labels:
+        #   application: demo2   # 已由 management.metrics.tags 注入
+        #   env: local           # 已由 management.metrics.tags 注入

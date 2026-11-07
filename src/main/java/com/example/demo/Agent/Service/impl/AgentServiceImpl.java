@@ -7,4 +7,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class AgentServiceImpl implements AgentService {
 
+    @Override
+    public void execute() {
+
+    }
 }

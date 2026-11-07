@@ -598,6 +598,46 @@ public class ToolsServiceImpl implements ToolsService {
         });
     }
 
+    @Override
+    public Map<String, Object> recomputeDbThumbCount(Long blogId, Boolean dryRun) {
+        if (blogId == null || blogId <= 0) {
+            return actionResult("RECOMPUTE_COUNT", true, false, "FAILED",
+                    "blogId must be greater than 0", null);
+        }
+        boolean execute = Boolean.FALSE.equals(dryRun);
+        try {
+            blog blogRow = blogMapper.selectById(blogId);
+            if (blogRow == null) {
+                return actionResult("RECOMPUTE_COUNT", !execute, false, "FAILED",
+                        "blog does not exist: " + blogId, null);
+            }
+            long details = thumbService.count(new LambdaQueryWrapper<thumb>()
+                    .eq(thumb::getBlogId, blogId));
+            int expected = (int) Math.min(details, (long) Integer.MAX_VALUE);
+            int current = blogRow.getThumbCount() == null ? 0 : blogRow.getThumbCount();
+            if (current == expected) {
+                return actionResult("RECOMPUTE_COUNT", !execute, false, "SKIPPED",
+                        "blog.thumbCount is already consistent",
+                        Map.of("before", current, "after", expected));
+            }
+            if (!execute) {
+                return actionResult("RECOMPUTE_COUNT", true, false, "PLANNED",
+                        "DRY-RUN: blog.thumbCount will be recomputed",
+                        Map.of("before", current, "after", expected));
+            }
+            blog update = new blog();
+            update.setId(blogId);
+            update.setThumbCount(expected);
+            blogMapper.updateById(update);
+            return actionResult("RECOMPUTE_COUNT", false, true, "EXECUTED",
+                    "blog.thumbCount recomputed",
+                    Map.of("before", current, "after", expected));
+        } catch (RuntimeException exception) {
+            return actionResult("RECOMPUTE_COUNT", !execute, false, "FAILED",
+                    exception.getMessage(), null);
+        }
+    }
+
     private Map<String, Object> executeWithUserLock(Long userId, String action, boolean dryRun,
                                                     Supplier<Map<String, Object>> body) {
         RLock lock = redissonClient.getLock(ThumbConstant.THUMB_LOCK_KEY_PREFIX + userId);
